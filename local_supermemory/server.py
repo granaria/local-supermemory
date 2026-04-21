@@ -21,13 +21,26 @@ async def list_tools() -> list[Tool]:
         # ── Memory Tools (v1) ────────────────────────────────
         Tool(
             name="memory",
-            description="Speichere oder vergesse Informationen. action: 'save'|'forget', content: Text, project: optional",
+            description=(
+                "Speichere oder vergesse Informationen. "
+                "action: 'save'|'forget', content: Text, project: optional. "
+                "Optionale Metadaten (nur bei save): title, source_url, description, language."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["save", "forget"], "default": "save"},
                     "content": {"type": "string", "maxLength": 200000},
-                    "project": {"type": "string", "maxLength": 128}
+                    "project": {"type": "string", "maxLength": 128},
+                    "title": {"type": "string", "maxLength": 256,
+                              "description": "Optional: Titel (z.B. bei Web-Clipping)"},
+                    "source_url": {"type": "string", "maxLength": 2048,
+                                   "description": "Optional: Herkunfts-URL"},
+                    "description": {"type": "string", "maxLength": 1024,
+                                    "description": "Optional: Kurzbeschreibung"},
+                    "language": {"type": "string", "enum": ["de", "en", "auto"],
+                                 "default": "auto",
+                                 "description": "Sprache für Sentence-Chunking"}
                 },
                 "required": ["content"]
             }
@@ -152,8 +165,25 @@ async def call_tool(name: str, args: dict) -> list[TextContent]:
         if not content:
             return [TextContent(type="text", text="Fehler: content erforderlich")]
         if action == "save":
-            r = store.save(content, project)
-            return [TextContent(type="text", text=f"✅ Gespeichert (ID: {r['id']}, Projekt: {r['project']})")]
+            r = store.save(
+                content, project,
+                title=args.get("title"),
+                source_url=args.get("source_url"),
+                description=args.get("description"),
+                language=args.get("language", "auto"),
+            )
+            if r.get("error"):
+                return [TextContent(type="text", text=f"⚠️ {r['error']}")]
+            chunks_info = f", {r['chunks']} Chunk(s)" if r.get("chunks", 1) > 1 else ""
+            graph_info = ""
+            if r.get("graph") and isinstance(r["graph"], dict):
+                g = r["graph"]
+                if g.get("entities") or g.get("relations"):
+                    graph_info = f", {g.get('entities', 0)} Entitäten, {g.get('relations', 0)} Relationen"
+            return [TextContent(
+                type="text",
+                text=f"✅ Gespeichert (ID: {r['id']}, Projekt: {r['project']}{chunks_info}{graph_info})"
+            )]
         else:
             r = store.forget(content, project)
             return [TextContent(type="text", text=f"{'✅ Gelöscht' if r['deleted'] else '⚠️ Nicht gefunden'} (ID: {r['id']})")]
@@ -186,7 +216,29 @@ async def call_tool(name: str, args: dict) -> list[TextContent]:
         parts.append("## Relevante Memories\n")
         if mems:
             for i, m in enumerate(mems, 1):
-                parts.append(f"### {i}. ({m['similarity']}%)\n{m['content']}\n")
+                # Score-Zeile: absolute + normalised nebeneinander
+                score_line = f"sim {m['similarity']}%"
+                if "normalised_score" in m:
+                    score_line += f" · rel {m['normalised_score']}/100"
+                # Metadata-Zeile (nur wenn vorhanden)
+                meta_bits = []
+                if m.get("title"):
+                    meta_bits.append(f"**{m['title']}**")
+                if m.get("source_url"):
+                    meta_bits.append(f"[Quelle]({m['source_url']})")
+                if m.get("description"):
+                    meta_bits.append(f"_{m['description']}_")
+                header = f"### {i}. [{score_line}]"
+                if meta_bits:
+                    header += " · " + " · ".join(meta_bits)
+                parts.append(header + "\n")
+                parts.append(m["content"] + "\n")
+                # Matched Chunk als Info-Footer, wenn Memory >1 Chunk hat
+                if m.get("matched_chunk") and m.get("chunk_count", 1) > 1:
+                    idx = m.get("matched_chunk_index", "?")
+                    parts.append(
+                        f"\n> *Bester Match: Chunk {idx}/{m['chunk_count']}*\n"
+                    )
         else:
             parts.append("Keine gefunden.\n")
 
