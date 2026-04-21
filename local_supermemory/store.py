@@ -1,4 +1,4 @@
-"""Memory Store - ChromaDB + SQLite Backend"""
+"""Memory Store v2 — ChromaDB + Ollama Embeddings + Knowledge Graph"""
 import sqlite3
 import json
 import hashlib
@@ -8,18 +8,40 @@ from typing import Optional
 import chromadb
 from chromadb.config import Settings
 
+from .embeddings import get_ollama_ef
+from .graph import KnowledgeGraph
+
 
 class MemoryStore:
     def __init__(self, data_dir: str = "~/.local-supermemory"):
         self.data_dir = Path(data_dir).expanduser()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
+        # Ollama Embedding Function (falls verfügbar)
+        self._ollama_ef = get_ollama_ef()
+        self._use_ollama = self._ollama_ef.is_available()
+        
         self.chroma = chromadb.PersistentClient(
             path=str(self.data_dir / "chroma"),
             settings=Settings(anonymized_telemetry=False)
         )
+        
         self.db_path = self.data_dir / "memories.db"
         self._init_db()
+        
+        # Knowledge Graph (gleiche SQLite DB)
+        self.graph = KnowledgeGraph(self.db_path)
+        
+        if self._use_ollama:
+            print(f"[Store] Ollama Embeddings aktiv ({self._ollama_ef.model})")
+        else:
+            print("[Store] ChromaDB Default Embeddings (Ollama nicht verfügbar)")
+    
+    @property
+    def embedding_info(self) -> str:
+        if self._use_ollama:
+            return f"Ollama ({self._ollama_ef.model})"
+        return "ChromaDB Default"
     
     def _init_db(self):
         conn = sqlite3.connect(self.db_path)
@@ -43,20 +65,27 @@ class MemoryStore:
                 generated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
-            INSERT OR IGNORE INTO projects (name, description, created_at) 
+            INSERT OR IGNORE INTO projects (name, description, created_at)
             VALUES ('default', 'Standard-Projekt', datetime('now'));
         """)
         conn.commit()
         conn.close()
     
     def _get_collection(self, project: str = "default"):
+        """ChromaDB Collection — mit Ollama Embeddings wenn verfügbar."""
         name = f"memories_{project.replace('-', '_')}"
-        return self.chroma.get_or_create_collection(name=name, metadata={"hnsw:space": "cosine"})
+        kwargs = {"name": name, "metadata": {"hnsw:space": "cosine"}}
+        if self._use_ollama:
+            kwargs["embedding_function"] = self._ollama_ef
+        return self.chroma.get_or_create_collection(**kwargs)
     
     def _gen_id(self, content: str) -> str:
         return hashlib.sha256(content.encode()).hexdigest()[:16]
     
-    def save(self, content: str, project: str = "default", metadata: Optional[dict] = None) -> dict:
+    def save(self, content: str, project: str = "default",
+             metadata: Optional[dict] = None,
+             auto_extract: bool = True) -> dict:
+        """Speichere Memory + optional Graph-Extraktion."""
         mid = self._gen_id(content)
         now = datetime.now().isoformat()
         coll = self._get_collection(project)
@@ -76,18 +105,30 @@ class MemoryStore:
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at
         """, (mid, content, project, now, now, json.dumps(meta)))
-        conn.execute("INSERT OR IGNORE INTO projects (name, description, created_at) VALUES (?, ?, ?)",
-                     (project, f"Projekt {project}", now))
+        conn.execute(
+            "INSERT OR IGNORE INTO projects (name, description, created_at) VALUES (?, ?, ?)",
+            (project, f"Projekt {project}", now)
+        )
         conn.execute("DELETE FROM profile_cache WHERE project = ?", (project,))
         conn.commit()
         conn.close()
-        return {"id": mid, "action": action, "project": project}
+        
+        # Auto-Extract: Graph-Entitäten + Relationen aus dem Inhalt
+        graph_result = None
+        if auto_extract and len(content) > 20:
+            graph_result = self.graph.extract_and_link(mid, content, project)
+        
+        result = {"id": mid, "action": action, "project": project}
+        if graph_result:
+            result["graph"] = graph_result
+        return result
     
     def forget(self, content: str, project: str = "default") -> dict:
         mid = self._gen_id(content)
         try:
             self._get_collection(project).delete(ids=[mid])
-        except: pass
+        except Exception:
+            pass
         conn = sqlite3.connect(self.db_path)
         cur = conn.execute("DELETE FROM memories WHERE id = ? AND project = ?", (mid, project))
         deleted = cur.rowcount > 0
@@ -115,10 +156,20 @@ class MemoryStore:
     def get_all(self, project: str = "default") -> list:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        cur = conn.execute("SELECT * FROM memories WHERE project = ? ORDER BY updated_at DESC", (project,))
+        cur = conn.execute(
+            "SELECT * FROM memories WHERE project = ? ORDER BY updated_at DESC",
+            (project,)
+        )
         mems = [dict(r) for r in cur.fetchall()]
         conn.close()
         return mems
+    
+    def get_memory_by_id(self, memory_id: str) -> Optional[dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        conn.close()
+        return dict(row) if row else None
     
     def list_projects(self) -> list:
         conn = sqlite3.connect(self.db_path)
@@ -126,28 +177,121 @@ class MemoryStore:
         projects = []
         for row in conn.execute("SELECT * FROM projects ORDER BY name"):
             p = dict(row)
-            p['count'] = conn.execute("SELECT COUNT(*) FROM memories WHERE project=?", (p['name'],)).fetchone()[0]
+            p['count'] = conn.execute(
+                "SELECT COUNT(*) FROM memories WHERE project=?", (p['name'],)
+            ).fetchone()[0]
             projects.append(p)
         conn.close()
         return projects
     
     def get_profile(self, project: str = "default") -> Optional[str]:
         conn = sqlite3.connect(self.db_path)
-        row = conn.execute("SELECT profile FROM profile_cache WHERE project=?", (project,)).fetchone()
+        row = conn.execute(
+            "SELECT profile FROM profile_cache WHERE project=?", (project,)
+        ).fetchone()
         conn.close()
         return row[0] if row else None
     
     def set_profile(self, project: str, profile: str):
         conn = sqlite3.connect(self.db_path)
-        conn.execute("INSERT OR REPLACE INTO profile_cache (project, profile, generated_at) VALUES (?, ?, datetime('now'))",
-                     (project, profile))
+        conn.execute(
+            "INSERT OR REPLACE INTO profile_cache (project, profile, generated_at) "
+            "VALUES (?, ?, datetime('now'))",
+            (project, profile)
+        )
         conn.commit()
         conn.close()
+    
+    def rebuild_graph(self, project: str = None) -> dict:
+        """Rebuild Knowledge Graph aus allen bestehenden Memories."""
+        if project:
+            memories = self.get_all(project)
+        else:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            memories = [dict(r) for r in conn.execute(
+                "SELECT * FROM memories ORDER BY updated_at"
+            ).fetchall()]
+            conn.close()
+        
+        total_entities = 0
+        total_relations = 0
+        processed = 0
+        errors = 0
+        
+        for mem in memories:
+            result = self.graph.extract_and_link(
+                mem["id"], mem["content"],
+                mem.get("project", "default")
+            )
+            if result.get("error"):
+                errors += 1
+            else:
+                total_entities += result.get("entities", 0)
+                total_relations += result.get("relations", 0)
+            processed += 1
+        
+        return {
+            "processed": processed,
+            "entities_extracted": total_entities,
+            "relations_extracted": total_relations,
+            "errors": errors
+        }
+    
+    def migrate_embeddings(self, project: str = None) -> dict:
+        """Re-embed alle Memories mit aktuellem Embedding-Provider."""
+        if not self._use_ollama:
+            return {"error": "Ollama nicht verfügbar — Migration nicht möglich"}
+        
+        if project:
+            projects = [project]
+        else:
+            projects = [p["name"] for p in self.list_projects()]
+        
+        total = 0
+        for proj in projects:
+            memories = self.get_all(proj)
+            if not memories:
+                continue
+            
+            # Lösche alte Collection
+            name = f"memories_{proj.replace('-', '_')}"
+            try:
+                self.chroma.delete_collection(name)
+            except Exception:
+                pass
+            
+            # Neue Collection mit Ollama Embeddings
+            coll = self._get_collection(proj)
+            
+            for mem in memories:
+                coll.add(
+                    ids=[mem["id"]],
+                    documents=[mem["content"]],
+                    metadatas=[{"project": proj}]
+                )
+                total += 1
+        
+        return {"migrated": total, "projects": len(projects),
+                "provider": self.embedding_info}
     
     def stats(self) -> dict:
         conn = sqlite3.connect(self.db_path)
         total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
         projects = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
-        by_proj = {r[0]: r[1] for r in conn.execute("SELECT project, COUNT(*) FROM memories GROUP BY project")}
+        by_proj = {
+            r[0]: r[1]
+            for r in conn.execute("SELECT project, COUNT(*) FROM memories GROUP BY project")
+        }
         conn.close()
-        return {"total": total, "projects": projects, "by_project": by_proj, "path": str(self.data_dir)}
+        
+        graph_stats = self.graph.stats()
+        
+        return {
+            "total": total,
+            "projects": projects,
+            "by_project": by_proj,
+            "path": str(self.data_dir),
+            "embedding_provider": self.embedding_info,
+            "graph": graph_stats
+        }

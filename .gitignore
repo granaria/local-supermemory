@@ -49,3 +49,9 @@ migrate.py
 .pytest_cache/
 .coverage
 htmlcov/
+
+# LaTeX build artifacts
+docs/handbuch.aux
+docs/handbuch.log
+docs/handbuch.out
+docs/handbuch.toc

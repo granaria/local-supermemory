@@ -1,0 +1,386 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[ngerman]{babel}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{fancyhdr}
+
+\geometry{margin=2.5cm}
+
+% Code-Stil
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codegreen}{RGB}{40,160,40}
+\definecolor{codegray}{RGB}{128,128,128}
+\definecolor{codeblue}{RGB}{40,40,200}
+
+\lstdefinestyle{code}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{codeblue}\bfseries,
+    stringstyle=\color{codegreen},
+    commentstyle=\color{codegray}\itshape,
+    breaklines=true,
+    frame=single,
+    framerule=0.5pt,
+    numbers=left,
+    numberstyle=\tiny\color{codegray},
+    tabsize=4
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textsc{Local Supermemory}}
+\fancyhead[R]{\thepage}
+
+\title{\textbf{Local Supermemory}\\[0.5em]\large Entwicklerhandbuch v1.0}
+\author{granaria}
+\date{Februar 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%──────────────────────────────────────────────────────────────
+\section{Übersicht}
+%──────────────────────────────────────────────────────────────
+
+Local Supermemory ist ein MCP-Server, der Claude Desktop ein persistentes Gedächtnis gibt. Alle Daten bleiben lokal.
+
+\subsection{Architektur}
+
+\begin{verbatim}
+┌─────────────────┐     ┌──────────────┐
+│  Claude Desktop │────▶│  MCP Server  │  (stdio)
+└─────────────────┘     └──────┬───────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+        ┌─────▼─────┐    ┌─────▼─────┐    ┌─────▼─────┐
+        │  ChromaDB │    │  SQLite   │    │  Ollama   │
+        │ (Vektoren)│    │(Metadaten)│    │ (Profil)  │
+        └───────────┘    └───────────┘    └───────────┘
+\end{verbatim}
+
+\textbf{Komponenten:}
+\begin{itemize}
+    \item \textbf{ChromaDB} -- Vektordatenbank für semantische Ähnlichkeitssuche
+    \item \textbf{SQLite} -- Relationale Daten: Memories, Projekte, Profil-Cache
+    \item \textbf{Ollama} -- Lokales LLM für Profil-Generierung (optional)
+\end{itemize}
+
+\subsection{Datenspeicherung}
+
+\begin{lstlisting}[style=code,language=bash]
+~/.local-supermemory/
++-- chroma/           # ChromaDB Vektoren
+|   +-- chroma.sqlite3
++-- memories.db       # SQLite Metadaten
+\end{lstlisting}
+
+%──────────────────────────────────────────────────────────────
+\section{Installation}
+%──────────────────────────────────────────────────────────────
+
+\begin{lstlisting}[style=code,language=bash]
+git clone https://github.com/granaria/local-supermemory.git
+cd local-supermemory
+pip install -e .
+\end{lstlisting}
+
+\textbf{Abhängigkeiten:} \texttt{mcp}, \texttt{chromadb}, \texttt{httpx}
+
+\subsection{Claude Desktop Config}
+
+Datei: \texttt{\textasciitilde/Library/Application Support/Claude/claude\_desktop\_config.json}
+
+\begin{lstlisting}[style=code]
+{
+  "mcpServers": {
+    "local-supermemory": {
+      "command": "python3",
+      "args": ["-m", "local_supermemory.server"]
+    }
+  }
+}
+\end{lstlisting}
+
+
+%──────────────────────────────────────────────────────────────
+\section{MCP Tools}
+%──────────────────────────────────────────────────────────────
+
+\subsection{memory}
+
+Speichert oder löscht eine Memory.
+
+\begin{tabular}{llll}
+\toprule
+\textbf{Parameter} & \textbf{Typ} & \textbf{Default} & \textbf{Beschreibung} \\
+\midrule
+\texttt{action} & string & \texttt{"save"} & \texttt{"save"} oder \texttt{"forget"} \\
+\texttt{content} & string & -- & Memory-Text (max 200KB) \\
+\texttt{project} & string & \texttt{"default"} & Projekt-Scope \\
+\bottomrule
+\end{tabular}
+
+\vspace{1em}
+\textbf{Interner Ablauf:}
+\begin{enumerate}
+    \item Content-Hash (SHA256[:16]) als ID generieren
+    \item ChromaDB: Dokument mit Embedding speichern
+    \item SQLite: Metadaten persistieren
+    \item Profil-Cache invalidieren
+\end{enumerate}
+
+\begin{lstlisting}[style=code,language=Python,caption={store.py -- save()}]
+def save(self, content: str, project: str = "default"):
+    mid = self._gen_id(content)  # SHA256[:16]
+    coll = self._get_collection(project)
+    
+    # Upsert in ChromaDB
+    existing = coll.get(ids=[mid])
+    if existing['ids']:
+        coll.update(ids=[mid], documents=[content])
+    else:
+        coll.add(ids=[mid], documents=[content])
+    
+    # SQLite: INSERT ... ON CONFLICT DO UPDATE
+    # Cache invalidieren
+    conn.execute("DELETE FROM profile_cache WHERE project=?")
+\end{lstlisting}
+
+
+\subsection{recall}
+
+Semantische Suche mit optionalem Profil.
+
+\begin{tabular}{llll}
+\toprule
+\textbf{Parameter} & \textbf{Typ} & \textbf{Default} & \textbf{Beschreibung} \\
+\midrule
+\texttt{query} & string & -- & Suchanfrage \\
+\texttt{project} & string & \texttt{"default"} & Projekt-Scope \\
+\texttt{include\_profile} & bool & \texttt{true} & Profil anhängen \\
+\texttt{n\_results} & int & 15 & Max. Ergebnisse \\
+\bottomrule
+\end{tabular}
+
+\vspace{1em}
+\textbf{Ablauf:}
+\begin{enumerate}
+    \item Query embedden (MiniLM-L6-v2, 384d Vektoren)
+    \item Cosine-Similarity-Suche in ChromaDB Collection
+    \item Optional: Profil aus Cache oder via Ollama generieren
+    \item Ergebnisse mit Similarity-Score (0--100\%) zurückgeben
+\end{enumerate}
+
+\begin{lstlisting}[style=code,language=Python,caption={store.py -- recall()}]
+def recall(self, query: str, project: str = "default", n: int = 15):
+    coll = self._get_collection(project)
+    res = coll.query(query_texts=[query], n_results=n)
+    
+    memories = []
+    for i, doc in enumerate(res['documents'][0]):
+        dist = res['distances'][0][i]  # Cosine: [0,2]
+        memories.append({
+            "content": doc,
+            "similarity": round((1 - dist) * 100),  # -> %
+            "id": res['ids'][0][i]
+        })
+    return memories
+\end{lstlisting}
+
+\subsection{Weitere Tools}
+
+\begin{description}
+    \item[list\_projects] Listet alle Projekte mit Memory-Count
+    \item[stats] Statistiken: Gesamtzahl, Projekte, Pfad
+    \item[whoami] Generiert Profil aus letzten 10 Memories via Ollama
+\end{description}
+
+
+%──────────────────────────────────────────────────────────────
+\section{Datenbank-Schema}
+%──────────────────────────────────────────────────────────────
+
+\begin{lstlisting}[style=code,language=SQL,caption={SQLite Schema}]
+CREATE TABLE memories (
+    id TEXT PRIMARY KEY,        -- SHA256[:16] vom Content
+    content TEXT NOT NULL,
+    project TEXT DEFAULT 'default',
+    created_at TEXT NOT NULL,   -- ISO 8601
+    updated_at TEXT NOT NULL,
+    metadata TEXT               -- JSON
+);
+
+CREATE TABLE projects (
+    name TEXT PRIMARY KEY,
+    description TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE profile_cache (
+    project TEXT PRIMARY KEY,
+    profile TEXT NOT NULL,      -- LLM-generierter Text
+    generated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_memories_project ON memories(project);
+\end{lstlisting}
+
+\textbf{Design-Entscheidungen:}
+\begin{itemize}
+    \item \textbf{Content-Hash als ID} -- Deduplizierung: gleicher Text = gleiche ID
+    \item \textbf{Profil-Cache} -- Vermeidet LLM-Aufrufe, invalidiert bei Änderung
+    \item \textbf{Dual Storage} -- ChromaDB für Vektoren, SQLite für Queries
+\end{itemize}
+
+
+%──────────────────────────────────────────────────────────────
+\section{Profil-Engine}
+%──────────────────────────────────────────────────────────────
+
+Aggregiert Memories zu strukturiertem Benutzerprofil via Ollama.
+
+\begin{lstlisting}[style=code,language=Python,caption={profile.py}]
+PROMPT = """Analysiere folgende Benutzer-Memories...
+Erstelle Profil mit: Identitaet, Hardware/Software, 
+Projekte, Praeferenzen, Kontakte.
+Nur vorhandene Infos, keine Spekulationen."""
+
+class ProfileEngine:
+    def __init__(self, url="http://localhost:11434", 
+                 model="qwen2.5:32b"):
+        self.url = url
+        self.model = model
+    
+    async def generate(self, memories: list) -> str:
+        text = "\n".join([f"- {m['content']}" for m in memories[:50]])
+        r = await client.post(f"{self.url}/api/generate", json={
+            "model": self.model,
+            "prompt": PROMPT.format(memories=text),
+            "options": {"temperature": 0.3}
+        })
+        return r.json()["response"]
+\end{lstlisting}
+
+\textbf{Config:} Model änderbar in \texttt{profile.py}. Fallback ohne Ollama: einfache Liste.
+
+%──────────────────────────────────────────────────────────────
+\section{ChromaDB Details}
+%──────────────────────────────────────────────────────────────
+
+\begin{lstlisting}[style=code,language=Python,caption={ChromaDB Init}]
+self.chroma = chromadb.PersistentClient(
+    path=str(self.data_dir / "chroma"),
+    settings=Settings(anonymized_telemetry=False)
+)
+
+def _get_collection(self, project: str = "default"):
+    name = f"memories_{project.replace('-', '_')}"
+    return self.chroma.get_or_create_collection(
+        name=name, 
+        metadata={"hnsw:space": "cosine"}
+    )
+\end{lstlisting}
+
+\textbf{Embedding:} \texttt{all-MiniLM-L6-v2} (384d), automatisch bei \texttt{add()}
+
+\textbf{HNSW-Index:} Hierarchical Navigable Small World -- ANN-Suche, Cosine Distance $\in [0,2]$
+
+
+%──────────────────────────────────────────────────────────────
+\section{MCP Server}
+%──────────────────────────────────────────────────────────────
+
+\begin{lstlisting}[style=code,language=Python,caption={server.py Struktur}]
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
+
+server = Server("local-supermemory")
+store = MemoryStore()
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    return [Tool(name="memory", inputSchema={...}), ...]
+
+@server.call_tool()
+async def call_tool(name: str, args: dict) -> list[TextContent]:
+    if name == "memory":
+        return [TextContent(type="text", text="...")]
+
+async def run():
+    async with stdio_server() as (r, w):
+        await server.run(r, w, server.create_initialization_options())
+\end{lstlisting}
+
+\textbf{Kommunikation:} stdio (Subprocess), JSON-RPC, alle Handler async
+
+%──────────────────────────────────────────────────────────────
+\section{Erweiterung}
+%──────────────────────────────────────────────────────────────
+
+\subsection{Neues Tool}
+
+\begin{lstlisting}[style=code,language=Python]
+# 1. In list_tools() registrieren
+Tool(name="export", description="Export als JSON", inputSchema={})
+
+# 2. In call_tool() implementieren
+elif name == "export":
+    mems = store.get_all()
+    return [TextContent(type="text", text=json.dumps(mems))]
+\end{lstlisting}
+
+\subsection{Custom Embedding}
+
+\begin{lstlisting}[style=code,language=Python]
+from chromadb.utils import embedding_functions
+ef = embedding_functions.SentenceTransformerEmbeddingFunction(
+    model_name="paraphrase-multilingual-MiniLM-L12-v2"
+)
+self.chroma.get_or_create_collection(name=name, embedding_function=ef)
+\end{lstlisting}
+
+
+%──────────────────────────────────────────────────────────────
+\section{Troubleshooting}
+%──────────────────────────────────────────────────────────────
+
+\begin{description}
+    \item[Server startet nicht] Python $\geq$3.10 prüfen, \texttt{pip install -e .}
+    \item[Kein Profil] Ollama fehlt: \texttt{ollama pull qwen2.5:32b}
+    \item[Leere Suche] Projekt-Name prüfen, Collection leer?
+    \item[ChromaDB Fehler] Reset: \texttt{rm -rf \textasciitilde/.local-supermemory/chroma}
+\end{description}
+
+%──────────────────────────────────────────────────────────────
+\section{Cloud vs. Local}
+%──────────────────────────────────────────────────────────────
+
+\begin{tabular}{lcc}
+\toprule
+\textbf{Feature} & \textbf{Cloud} & \textbf{Local} \\
+\midrule
+Speicher & Cloudflare & \texttt{\textasciitilde/.local-supermemory} \\
+Datenschutz & Cloud & 100\% lokal \\
+Offline & Nein & Ja \\
+Embedding & Proprietär & MiniLM-L6-v2 \\
+Profil-LLM & Cloud-API & Ollama \\
+Kosten & Subscription & Kostenlos \\
+\bottomrule
+\end{tabular}
+
+\vfill
+\begin{center}
+\rule{0.5\textwidth}{0.4pt}\\[1em]
+\url{https://github.com/granaria/local-supermemory}
+\end{center}
+
+\end{document}
