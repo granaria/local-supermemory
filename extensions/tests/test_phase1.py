@@ -1,13 +1,11 @@
 """
-Tests for Phase 1 — Progressive Disclosure + Privacy Filter
-============================================================
+Tests for the privacy filter + progressive recall extensions.
 
 Run with:
-    cd /Applications/ServBay/www/supermemory.granaria/phase1
+    python extensions/tests/test_phase1.py
+    # or
+    cd /Applications/ServBay/www/supermemory.granaria/extensions
     python -m pytest tests/ -v
-
-Or (without pytest):
-    python tests/test_phase1.py
 """
 
 import sys
@@ -15,7 +13,7 @@ import os
 import unittest
 from pathlib import Path
 
-# Make imports work whether run from phase1/ or tests/
+# Make sibling modules importable when run directly from tests/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hooks.privacy_filter import (

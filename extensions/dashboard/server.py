@@ -5,7 +5,7 @@ nothing weird happens at startup. Serves a single HTML page + JSON API.
 Binds strictly to 127.0.0.1; this is not meant to be exposed.
 
 Run:
-    python -m phase1.dashboard
+    python -m extensions.dashboard
 
 Endpoints:
     GET  /              → dashboard HTML

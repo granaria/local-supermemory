@@ -8,9 +8,9 @@ from mcp.types import Tool, TextContent
 from .store import MemoryStore
 from .profile import get_engine
 
-# ── Phase 1: Privacy filter + progressive recall + dashboard ────
-from phase1.tools.recall_progressive import build_index, fetch_by_ids
-from phase1.dashboard.integration import apply_save_policy
+# ── Extensions: privacy filter + progressive recall + dashboard ─
+from extensions.tools.recall_progressive import build_index, fetch_by_ids
+from extensions.dashboard.integration import apply_save_policy
 
 server = Server("local-supermemory")
 store = MemoryStore()

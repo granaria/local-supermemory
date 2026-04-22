@@ -48,7 +48,7 @@ hunt the specific bug but to make the whole dispatch path observable.
 
 ### Shape (pre-implementation estimate)
 
-- New module `phase1/dashboard/tool_audit.py` (~150 LOC)
+- New module `extensions/dashboard/tool_audit.py` (~150 LOC)
 - One-line hook in `local_supermemory/server.py::call_tool` (decorator
   or prepend in dispatcher)
 - New MCP tool definition + dispatcher branch (~30 LOC)
@@ -56,7 +56,7 @@ hunt the specific bug but to make the whole dispatch path observable.
   frontend panel in `index.html` (~80 LOC JS/HTML)
 - 8–10 unit tests (dispatch logging, schema mismatch, silent-default
   detection, fingerprint behavior)
-- Section in `phase1/README.md`
+- Section in `extensions/README.md`
 - Entry in dashboard Tool-Calls panel help text
 
 Total: ~400 LOC, one focused commit.

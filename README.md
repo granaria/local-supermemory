@@ -171,8 +171,8 @@ The response always reports what was filtered (`🔒 title: patterns redacted: s
 └──────────────────────┘     └────────┬─────────┘
                                       │
                              ┌────────┴──────────┐
-                             │ Privacy Filter    │  (phase1/hooks)
-                             │ Progressive Recall│  (phase1/tools)
+                             │ Privacy Filter    │  (extensions/hooks)
+                             │ Progressive Recall│  (extensions/tools)
                              └────────┬──────────┘
                                       │
                     ┌─────────────────┼─────────────────┐
@@ -194,7 +194,7 @@ Optional local web UI for toggling capture and privacy behavior — runs as a
 separate process, hot-reloaded by the MCP server on each save.
 
 ```bash
-python -m phase1.dashboard            # → http://127.0.0.1:7333
+python -m extensions.dashboard        # → http://127.0.0.1:7333
 # or, if installed as a script:
 granaria-dashboard
 ```
@@ -217,8 +217,8 @@ lives at `~/.granaria.supermemory/dashboard_audit.jsonl`.
 Run the Phase 1 unit tests:
 
 ```bash
-python phase1/tests/test_phase1.py       # 34 tests: privacy filter, progressive recall, helpers
-python phase1/tests/test_dashboard.py    # 22 tests: config, policy, filter toggles
+python extensions/tests/test_phase1.py     # 34 tests: privacy filter, progressive recall, helpers
+python extensions/tests/test_dashboard.py  # 22 tests: config, policy, filter toggles
 ```
 
 ## License

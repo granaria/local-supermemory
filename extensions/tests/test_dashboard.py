@@ -4,7 +4,7 @@ Covers: config load/save/hot-reload, policy orchestration (blocklist,
 max-chars, pattern toggles, master disable), privacy filter toggle kwargs.
 
 Run:
-    python phase1/tests/test_dashboard.py
+    python extensions/tests/test_dashboard.py
 """
 
 import json
@@ -15,14 +15,14 @@ import time
 import unittest
 from pathlib import Path
 
-# Make phase1 importable when run from tests/
+# Make `extensions` importable when run directly from tests/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from phase1.dashboard.config import Config, _DEFAULTS, _deep_merge
-from phase1.dashboard.integration import apply_save_policy
-from phase1.dashboard import config as config_mod
-from phase1.dashboard import audit as audit_mod
-from phase1.hooks.privacy_filter import filter_content
+from extensions.dashboard.config import Config, _DEFAULTS, _deep_merge
+from extensions.dashboard.integration import apply_save_policy
+from extensions.dashboard import config as config_mod
+from extensions.dashboard import audit as audit_mod
+from extensions.hooks.privacy_filter import filter_content
 
 
 # ── Config ─────────────────────────────────────────────────────────

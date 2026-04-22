@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from phase1.hooks.privacy_filter import filter_content, FilterResult
+from extensions.hooks.privacy_filter import filter_content, FilterResult
 
 from .config import get_config
 from . import audit

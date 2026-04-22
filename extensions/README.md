@@ -1,10 +1,18 @@
-# supermemory.granaria — Phase 1 Upgrade
+# supermemory.granaria — Extensions Kit (original delivery doc)
 
-Drop-in extensions for your existing `supermemory.granaria` FastMCP server,
-inspired by (but not copied from) claude-mem's progressive-disclosure and
-dual-tag privacy patterns.
+> **Note.** This file is the **original delivery documentation** for the
+> standalone `phase1/`-kit (FastMCP-targeted installer path with
+> `install_phase1.sh`). The kit was integrated into this repo's
+> low-level `mcp.server.Server` codebase manually and the folder has
+> since been renamed `phase1/ → extensions/`. For the active
+> integration, see the top-level `README.md`. This file is kept for
+> reference and for downstream users who want to adapt the kit to a
+> different FastMCP server.
 
-**Status:** 31/31 tests green, ready for integration.
+Drop-in extensions inspired by (but not copied from) claude-mem's
+progressive-disclosure and dual-tag privacy patterns.
+
+**Status (in this repo):** 56/56 tests green (34 original + 22 dashboard).
 
 ---
 

@@ -1,4 +1,4 @@
-"""Allow `python -m phase1.dashboard`."""
+"""Allow `python -m extensions.dashboard`."""
 from .server import main
 import sys
 

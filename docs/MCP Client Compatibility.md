@@ -28,7 +28,7 @@ redaction (AWS/Stripe/GitHub/...) is automatic for any client.
 
 Tier-1 `<private>…</private>` stripping is only useful if the client-side LLM
 knows to wrap sensitive content in those tags. Claude learns this through
-`phase1/SKILL_PATCH.md`. For other clients, add a user instruction such as:
+`extensions/SKILL_PATCH.md`. For other clients, add a user instruction such as:
 
 > Wrap anything that should never be persisted in `<private>…</private>`
 > tags. Unclosed tags will cause the save to be rejected.
@@ -58,7 +58,7 @@ MCP client.
 ## Known gaps
 
 - No load testing against clients other than Claude.
-- `phase1/SKILL_PATCH.md` is written in Claude voice; adapt its phrasing
+- `extensions/SKILL_PATCH.md` is written in Claude voice; adapt its phrasing
   when porting to another client's instruction channel.
 - Tool descriptions are in English/German mix — some clients may prefer
   consistent-language descriptions for tool selection quality.
